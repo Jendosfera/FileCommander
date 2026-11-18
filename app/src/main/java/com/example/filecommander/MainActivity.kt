@@ -41,8 +41,7 @@ class MainActivity : AppCompatActivity() {
     ) { result ->
         Log.d(TAG, "permission result: $result")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            !Environment.isExternalStorageManager()
-        ) {
+            !Environment.isExternalStorageManager()) {
             launchAllFilesSettings()
         } else {
             reloadPanes()
@@ -53,8 +52,6 @@ class MainActivity : AppCompatActivity() {
         installCrashHandler()
         super.onCreate(savedInstanceState)
         allFilesRequested = savedInstanceState?.getBoolean(KEY_ALL_FILES_REQ) ?: false
-        Log.d(TAG, "onCreate, allFilesRequested=$allFilesRequested, isExtMgr=${Environment.isExternalStorageManager()}")
-
         setContentView(R.layout.activity_main)
 
         viewPager = findViewById(R.id.viewPager)
@@ -65,9 +62,7 @@ class MainActivity : AppCompatActivity() {
                 FilePaneFragment.newInstance(position)
         }
 
-        if (!allFilesRequested) {
-            requestStoragePermissions()
-        }
+        if (!allFilesRequested) requestStoragePermissions()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -75,11 +70,11 @@ class MainActivity : AppCompatActivity() {
         outState.putBoolean(KEY_ALL_FILES_REQ, allFilesRequested)
     }
 
-    fun setPanePath(paneIndex: Int, path: String) {
-        panePaths[paneIndex] = path
-    }
-
+    fun setPanePath(paneIndex: Int, path: String) { panePaths[paneIndex] = path }
     fun getOtherPanePath(paneIndex: Int): String? = panePaths[1 - paneIndex]
+
+    /** Обновить оба окна (после copy/move). */
+    fun reloadAll() = reloadPanes()
 
     private fun launchAllFilesSettings() {
         if (allFilesRequested) return
@@ -120,8 +115,7 @@ class MainActivity : AppCompatActivity() {
         if (missing.isNotEmpty()) {
             requestPermissionLauncher.launch(missing.toTypedArray())
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            !Environment.isExternalStorageManager()
-        ) {
+            !Environment.isExternalStorageManager()) {
             launchAllFilesSettings()
         }
     }
@@ -131,21 +125,14 @@ class MainActivity : AppCompatActivity() {
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
             val log = "\n=== $ts ===\n${Log.getStackTraceString(e)}\n"
-            // app-specific: доступен через MTP
             try {
                 getExternalFilesDir(null)?.let { dir ->
                     dir.mkdirs()
                     File(dir, "crash.log").appendText(log)
                 }
             } catch (_: Throwable) {}
-            // корень внешнего стораджа: доступен через файловый менеджер (если уже дали доступ)
-            try {
-                File("/storage/emulated/0/FileCommander-crash.log").appendText(log)
-            } catch (_: Throwable) {}
-            // внутренний: на случай если ничего снаружи не пишется
-            try {
-                File(filesDir, "crash.log").appendText(log)
-            } catch (_: Throwable) {}
+            try { File("/storage/emulated/0/FileCommander-crash.log").appendText(log) } catch (_: Throwable) {}
+            try { File(filesDir, "crash.log").appendText(log) } catch (_: Throwable) {}
             prev?.uncaughtException(t, e)
         }
     }

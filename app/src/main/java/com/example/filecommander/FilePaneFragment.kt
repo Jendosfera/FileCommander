@@ -1,17 +1,21 @@
 package com.example.filecommander
 
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.os.Bundle
 import android.os.Environment
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.MimeTypeMap
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -30,6 +34,10 @@ class FilePaneFragment : Fragment() {
     private lateinit var breadcrumbContainer: LinearLayout
     private lateinit var breadcrumbScroll: HorizontalScrollView
 
+    private val rootDir: File by lazy {
+        Environment.getExternalStorageDirectory() ?: File("/storage/emulated/0")
+    }
+
     companion object {
         private const val TAG = "FileCommander"
         private const val ARG_PANE_INDEX = "pane_index"
@@ -44,17 +52,12 @@ class FilePaneFragment : Fragment() {
         paneIndex = arguments?.getInt(ARG_PANE_INDEX) ?: 0
         val saved = savedInstanceState?.getString(KEY_CURRENT_DIR)
         currentDir = if (saved != null) File(saved) else defaultDir(paneIndex)
-        Log.d(TAG, "pane $paneIndex init dir=${currentDir?.absolutePath}")
     }
 
     private fun defaultDir(index: Int): File {
-        val root = Environment.getExternalStorageDirectory() ?: File("/storage/emulated/0")
-        return if (index == 0) {
-            if (root.exists()) root else File("/")
-        } else {
-            val dl = File(root, "Download")
-            if (dl.exists()) dl else root
-        }
+        if (index == 0) return if (rootDir.exists()) rootDir else File("/")
+        val dl = File(rootDir, "Download")
+        return if (dl.exists()) dl else rootDir
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -74,7 +77,9 @@ class FilePaneFragment : Fragment() {
 
             adapter = FileAdapter(
                 onItemClick = { adapter.selectedFile = it.file; adapter.notifyDataSetChanged() },
-                onItemDoubleClick = { if (it.isDirectory) loadDirectory(it.file) else openFile(it) },
+                onItemDoubleClick = {
+                    if (it.isDirectory) loadDirectory(it.file) else openFile(it)
+                },
                 onItemLongClick = { showContextMenu(it) }
             )
             recyclerView.layoutManager = LinearLayoutManager(requireContext())
@@ -90,7 +95,6 @@ class FilePaneFragment : Fragment() {
             currentDir?.let { loadDirectory(it) }
         } catch (e: Throwable) {
             Log.e(TAG, "onViewCreated failed", e)
-            Toast.makeText(activity ?: return, "Ошибка UI: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -101,16 +105,13 @@ class FilePaneFragment : Fragment() {
     private fun loadDirectory(dir: File) {
         try {
             if (!isAdded || view == null) return
-            if (!dir.exists() || !dir.isDirectory) {
-                Log.w(TAG, "loadDirectory: not a dir ${dir.absolutePath}")
-                return
-            }
+            if (!dir.exists() || !dir.isDirectory) return
+
             currentDir = dir
             (activity as? MainActivity)?.setPanePath(paneIndex, dir.absolutePath)
 
-            val files = try { dir.listFiles() } catch (e: Throwable) {
-                Log.e(TAG, "listFiles failed on ${dir.absolutePath}", e); null
-            }?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
+            val files = try { dir.listFiles() } catch (e: Throwable) { null }
+                ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
 
             val quickItems = files.map { f ->
                 FileItem(
@@ -139,22 +140,29 @@ class FilePaneFragment : Fragment() {
                     }
                     adapter.submitList(updated)
                 } catch (e: Throwable) {
-                    Log.e(TAG, "folderSize coroutine failed", e)
+                    Log.e(TAG, "folderSize failed", e)
                 }
             }
         } catch (e: Throwable) {
             Log.e(TAG, "loadDirectory failed on ${dir.absolutePath}", e)
-            Toast.makeText(activity ?: return, "Ошибка чтения каталога: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun updateBreadcrumb() {
         val dir = currentDir ?: return
         breadcrumbContainer.removeAllViews()
-        val segments = dir.absolutePath.split("/").filter { it.isNotEmpty() }
-        var acc = ""
-        breadcrumbContainer.addView(makeCrumb("/") { loadDirectory(File("/")) })
-        for (seg in segments) {
+
+        breadcrumbContainer.addView(makeCrumb("root") { loadDirectory(rootDir) })
+
+        val rootPath = rootDir.absolutePath
+        val fullPath = dir.absolutePath
+        if (!fullPath.startsWith(rootPath)) return
+
+        val rel = fullPath.removePrefix(rootPath).trim('/')
+        if (rel.isEmpty()) return
+
+        var acc = rootPath
+        for (seg in rel.split("/").filter { it.isNotEmpty() }) {
             acc += "/$seg"
             val path = acc
             breadcrumbContainer.addView(makeCrumb(" > $seg") { loadDirectory(File(path)) })
@@ -165,17 +173,50 @@ class FilePaneFragment : Fragment() {
     private fun makeCrumb(text: String, onClick: () -> Unit): TextView =
         TextView(requireContext()).apply {
             this.text = text
+            setTextColor(0xFF000000.toInt())
+            textSize = 15f
             setPadding(8, 4, 8, 4)
             setOnClickListener { onClick() }
         }
 
     private fun goToParent() {
-        val parent = currentDir?.parentFile ?: return
-        if (parent.exists()) loadDirectory(parent)
+        val cur = currentDir ?: return
+        if (cur.absolutePath == rootDir.absolutePath) {
+            Toast.makeText(requireContext(), "Это корень", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val parent = cur.parentFile
+        if (parent == null || !parent.exists() ||
+            parent.absolutePath.length < rootDir.absolutePath.length) {
+            loadDirectory(rootDir)
+            return
+        }
+        loadDirectory(parent)
     }
 
     private fun openFile(item: FileItem) {
-        Toast.makeText(requireContext(), "Запуск: ${item.name}", Toast.LENGTH_SHORT).show()
+        try {
+            val ctx = requireContext()
+            val uri = FileProvider.getUriForFile(
+                ctx,
+                "${ctx.packageName}.fileprovider",
+                item.file
+            )
+            val ext = item.extension.lowercase()
+            val mime = if (ext.isEmpty()) "*/*"
+                       else MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(requireContext(), "Нет приложения для открытия", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(requireContext(), "Не удалось открыть: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showCreateMenu() {
@@ -217,8 +258,8 @@ class FilePaneFragment : Fragment() {
                     0 -> copyToOtherPane(item.file, false)
                     1 -> copyToOtherPane(item.file, true)
                     2 -> showRenameDialog(item.file)
-                    3 -> Toast.makeText(requireContext(), "Просмотр", Toast.LENGTH_SHORT).show()
-                    4 -> Toast.makeText(requireContext(), "Правка", Toast.LENGTH_SHORT).show()
+                    3 -> openFile(item)
+                    4 -> Toast.makeText(requireContext(), "Правка (в разработке)", Toast.LENGTH_SHORT).show()
                     5 -> {
                         if (item.file.deleteRecursively()) currentDir?.let { loadDirectory(it) }
                     }
@@ -256,11 +297,26 @@ class FilePaneFragment : Fragment() {
             return
         }
         val targetDir = File(target)
-        if (!targetDir.exists()) return
+        if (!targetDir.exists() || !targetDir.isDirectory) {
+            Toast.makeText(requireContext(), "Целевой каталог недоступен", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (targetDir.absolutePath == file.parentFile?.absolutePath) {
+            Toast.makeText(requireContext(), "Источник и приёмник совпадают", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val dest = File(targetDir, file.name)
+        if (dest.exists()) {
+            Toast.makeText(requireContext(), "Уже существует: ${file.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
         try {
-            val dest = File(targetDir, file.name)
             if (move) FileUtils.move(file, dest) else FileUtils.copy(file, dest)
-            currentDir?.let { loadDirectory(it) }
+            Toast.makeText(requireContext(),
+                (if (move) "Перемещено" else "Скопировано") + ": ${file.name} → ${targetDir.absolutePath}",
+                Toast.LENGTH_SHORT).show()
+            // Обновляем оба окна
+            (activity as? MainActivity)?.reloadAll()
         } catch (e: Exception) {
             Toast.makeText(requireContext(), "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
         }

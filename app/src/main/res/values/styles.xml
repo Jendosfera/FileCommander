@@ -1,9 +1,23 @@
 <resources>
     <style name="Theme.FileCommander" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Стилизация встроенного FastScroll RecyclerView -->
         <item name="fastScrollVerticalThumbDrawable">@drawable/fast_scroll_thumb</item>
         <item name="fastScrollVerticalTrackDrawable">@drawable/fast_scroll_track</item>
-        <item name="fastScrollHorizontalThumbDrawable">@drawable/fast_scroll_thumb</item>
-        <item name="fastScrollHorizontalTrackDrawable">@drawable/fast_scroll_track</item>
+    </style>
+
+    <style name="BottomButton">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_margin">2dp</item>
+        <item name="android:background">@drawable/bg_button</item>
+        <item name="android:textColor">#000000</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">8dp</item>
+        <item name="android:paddingLeft">2dp</item>
+        <item name="android:paddingRight">2dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
     </style>
 </resources>

@@ -1,11 +1,15 @@
 package com.example.filecommander
 
+import android.annotation.SuppressLint
+import android.view.GestureDetector
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import coil.load
 
 class FileAdapter(
     private val onItemClick: (FileItem) -> Unit,
@@ -33,38 +37,50 @@ class FileAdapter(
         return ViewHolder(view)
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
         holder.name.text = item.name
         holder.size.text = FileUtils.formatSize(item.size)
-        holder.icon.setImageResource(
-            if (item.isDirectory) android.R.drawable.ic_menu_view
-            else android.R.drawable.ic_menu_save
-        )
+
+        when {
+            item.isDirectory -> holder.icon.load(R.drawable.ic_folder_yellow)
+            isImage(item.extension) -> holder.icon.load(item.file) {
+                crossfade(true)
+                placeholder(R.drawable.ic_file_gray)
+                error(R.drawable.ic_file_gray)
+                size(256, 256)
+            }
+            else -> holder.icon.load(R.drawable.ic_file_gray)
+        }
 
         holder.itemView.setBackgroundColor(
-            if (selectedFile?.absolutePath == item.file.absolutePath) 0x3300BFFF else 0x00000000
+            if (selectedFile?.absolutePath == item.file.absolutePath) 0x55FFEB3B else 0x00000000
         )
 
-        // Обработка одиночного/двойного тапа в одном listener'е
-        holder.itemView.setOnClickListener(object : View.OnClickListener {
-            private var lastClick = 0L
-            override fun onClick(v: View?) {
-                val now = System.currentTimeMillis()
-                if (now - lastClick < 300) {
-                    onItemDoubleClick(item)
-                    lastClick = 0L
-                } else {
+        val detector = GestureDetector(holder.itemView.context,
+            object : GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                     onItemClick(item)
-                    lastClick = now
+                    return true
                 }
-            }
-        })
-        holder.itemView.setOnLongClickListener {
-            onItemLongClick(item)
-            true
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                    onItemDoubleClick(item)
+                    return true
+                }
+                override fun onLongPress(e: MotionEvent) {
+                    onItemLongClick(item)
+                }
+            })
+
+        holder.itemView.setOnTouchListener { _, event ->
+            detector.onTouchEvent(event)
+            false
         }
     }
 
     override fun getItemCount(): Int = items.size
+
+    private fun isImage(ext: String): Boolean =
+        ext.lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")
 }
