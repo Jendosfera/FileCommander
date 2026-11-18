@@ -7,18 +7,17 @@ import java.util.Locale
 
 object FileUtils {
 
-    /** Рекурсивно считает размер каталога в байтах. */
     fun folderSize(dir: File): Long {
         var size = 0L
         try {
             dir.walkTopDown().forEach { if (it.isFile) size += it.length() }
-        } catch (_: Exception) { /* доступ запрещён — пропускаем */ }
+        } catch (_: Exception) { }
         return size
     }
 
-    /** Размер в МБ с 3 знаками после запятой. */
     fun formatSize(bytes: Long): String {
-        if (bytes <= 0) return "0.000 MB"
+        if (bytes < 0) return "…"
+        if (bytes == 0L) return "0.000 MB"
         return String.format(Locale.US, "%.3f MB", bytes / (1024.0 * 1024.0))
     }
 

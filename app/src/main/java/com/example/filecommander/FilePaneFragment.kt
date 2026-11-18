@@ -11,8 +11,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class FilePaneFragment : Fragment() {
@@ -26,8 +30,27 @@ class FilePaneFragment : Fragment() {
 
     companion object {
         private const val ARG_PANE_INDEX = "pane_index"
+        private const val KEY_CURRENT_DIR = "current_dir"
         fun newInstance(index: Int) = FilePaneFragment().apply {
             arguments = Bundle().apply { putInt(ARG_PANE_INDEX, index) }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        paneIndex = arguments?.getInt(ARG_PANE_INDEX) ?: 0
+        val saved = savedInstanceState?.getString(KEY_CURRENT_DIR)
+        currentDir = when {
+            saved != null -> File(saved)
+            paneIndex == 0 -> File("/storage/emulated/0")
+            else -> File("/storage/emulated/0/Download")
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (::currentDir.isInitialized) {
+            outState.putString(KEY_CURRENT_DIR, currentDir.absolutePath)
         }
     }
 
@@ -36,10 +59,6 @@ class FilePaneFragment : Fragment() {
     ): View = inflater.inflate(R.layout.fragment_file_pane, container, false)
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        paneIndex = arguments?.getInt(ARG_PANE_INDEX) ?: 0
-        currentDir = if (paneIndex == 0) File("/storage/emulated/0")
-                     else File("/storage/emulated/0/Download")
-
         recyclerView = view.findViewById(R.id.recyclerView)
         breadcrumbContainer = view.findViewById(R.id.breadcrumbContainer)
         breadcrumbScroll = view.findViewById(R.id.breadcrumbScroll)
@@ -62,7 +81,12 @@ class FilePaneFragment : Fragment() {
         loadDirectory(currentDir)
     }
 
+    fun reloadCurrentDir() {
+        if (::currentDir.isInitialized) loadDirectory(currentDir)
+    }
+
     private fun loadDirectory(dir: File) {
+        if (!isAdded || view == null) return
         if (!dir.exists() || !dir.isDirectory) return
         currentDir = dir
         (activity as? MainActivity)?.setPanePath(paneIndex, dir.absolutePath)
@@ -71,18 +95,32 @@ class FilePaneFragment : Fragment() {
             ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
             ?: emptyList()
 
-        val items = files.map { f ->
+        val quickItems = files.map { f ->
             FileItem(
                 file = f,
                 name = f.name,
                 isDirectory = f.isDirectory,
-                size = if (f.isDirectory) FileUtils.folderSize(f) else f.length(),
+                size = if (f.isDirectory) -1L else f.length(),
                 extension = f.extension
             )
         }
         adapter.selectedFile = null
-        adapter.submitList(items)
+        adapter.submitList(quickItems)
         updateBreadcrumb()
+
+        val dirs = quickItems.filter { it.isDirectory }
+        if (dirs.isEmpty()) return
+        viewLifecycleOwner.lifecycleScope.launch {
+            val sizes: Map<File, Long> = withContext(Dispatchers.IO) {
+                dirs.associate { it.file to FileUtils.folderSize(it.file) }
+            }
+            if (!isAdded || view == null || currentDir != dir) return@launch
+            val updated = quickItems.map { item ->
+                val sz = sizes[item.file]
+                if (item.isDirectory && sz != null) item.copy(size = sz) else item
+            }
+            adapter.submitList(updated)
+        }
     }
 
     private fun updateBreadcrumb() {
