@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.FileCommander" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Стилизация встроенного FastScroll RecyclerView -->
+        <item name="fastScrollVerticalThumbDrawable">@drawable/fast_scroll_thumb</item>
+        <item name="fastScrollVerticalTrackDrawable">@drawable/fast_scroll_track</item>
+        <item name="fastScrollHorizontalThumbDrawable">@drawable/fast_scroll_thumb</item>
+        <item name="fastScrollHorizontalTrackDrawable">@drawable/fast_scroll_track</item>
+    </style>
+</resources>
