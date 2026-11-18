@@ -2,6 +2,8 @@ package com.example.filecommander
 
 import android.app.AlertDialog
 import android.os.Bundle
+import android.os.Environment
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -22,13 +24,14 @@ import java.io.File
 class FilePaneFragment : Fragment() {
 
     private var paneIndex: Int = 0
-    private lateinit var currentDir: File
+    private var currentDir: File? = null
     private lateinit var adapter: FileAdapter
     private lateinit var recyclerView: RecyclerView
     private lateinit var breadcrumbContainer: LinearLayout
     private lateinit var breadcrumbScroll: HorizontalScrollView
 
     companion object {
+        private const val TAG = "FileCommander"
         private const val ARG_PANE_INDEX = "pane_index"
         private const val KEY_CURRENT_DIR = "current_dir"
         fun newInstance(index: Int) = FilePaneFragment().apply {
@@ -40,18 +43,23 @@ class FilePaneFragment : Fragment() {
         super.onCreate(savedInstanceState)
         paneIndex = arguments?.getInt(ARG_PANE_INDEX) ?: 0
         val saved = savedInstanceState?.getString(KEY_CURRENT_DIR)
-        currentDir = when {
-            saved != null -> File(saved)
-            paneIndex == 0 -> File("/storage/emulated/0")
-            else -> File("/storage/emulated/0/Download")
+        currentDir = if (saved != null) File(saved) else defaultDir(paneIndex)
+        Log.d(TAG, "pane $paneIndex init dir=${currentDir?.absolutePath}")
+    }
+
+    private fun defaultDir(index: Int): File {
+        val root = Environment.getExternalStorageDirectory() ?: File("/storage/emulated/0")
+        return if (index == 0) {
+            if (root.exists()) root else File("/")
+        } else {
+            val dl = File(root, "Download")
+            if (dl.exists()) dl else root
         }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        if (::currentDir.isInitialized) {
-            outState.putString(KEY_CURRENT_DIR, currentDir.absolutePath)
-        }
+        currentDir?.let { outState.putString(KEY_CURRENT_DIR, it.absolutePath) }
     }
 
     override fun onCreateView(
@@ -59,75 +67,92 @@ class FilePaneFragment : Fragment() {
     ): View = inflater.inflate(R.layout.fragment_file_pane, container, false)
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        recyclerView = view.findViewById(R.id.recyclerView)
-        breadcrumbContainer = view.findViewById(R.id.breadcrumbContainer)
-        breadcrumbScroll = view.findViewById(R.id.breadcrumbScroll)
+        try {
+            recyclerView = view.findViewById(R.id.recyclerView)
+            breadcrumbContainer = view.findViewById(R.id.breadcrumbContainer)
+            breadcrumbScroll = view.findViewById(R.id.breadcrumbScroll)
 
-        adapter = FileAdapter(
-            onItemClick = { adapter.selectedFile = it.file; adapter.notifyDataSetChanged() },
-            onItemDoubleClick = { if (it.isDirectory) loadDirectory(it.file) else openFile(it) },
-            onItemLongClick = { showContextMenu(it) }
-        )
-        recyclerView.layoutManager = LinearLayoutManager(requireContext())
-        recyclerView.adapter = adapter
+            adapter = FileAdapter(
+                onItemClick = { adapter.selectedFile = it.file; adapter.notifyDataSetChanged() },
+                onItemDoubleClick = { if (it.isDirectory) loadDirectory(it.file) else openFile(it) },
+                onItemLongClick = { showContextMenu(it) }
+            )
+            recyclerView.layoutManager = LinearLayoutManager(requireContext())
+            recyclerView.adapter = adapter
 
-        view.findViewById<View>(R.id.btnBack).setOnClickListener { goToParent() }
-        view.findViewById<View>(R.id.btnMenu).setOnClickListener { showCreateMenu() }
-        view.findViewById<View>(R.id.btnCreateFile).setOnClickListener { showCreateDialog(true) }
-        view.findViewById<View>(R.id.btnCreateDir).setOnClickListener { showCreateDialog(false) }
-        view.findViewById<View>(R.id.btnCopy).setOnClickListener { copySelected(false) }
-        view.findViewById<View>(R.id.btnMove).setOnClickListener { copySelected(true) }
+            view.findViewById<View>(R.id.btnBack).setOnClickListener { goToParent() }
+            view.findViewById<View>(R.id.btnMenu).setOnClickListener { showCreateMenu() }
+            view.findViewById<View>(R.id.btnCreateFile).setOnClickListener { showCreateDialog(true) }
+            view.findViewById<View>(R.id.btnCreateDir).setOnClickListener { showCreateDialog(false) }
+            view.findViewById<View>(R.id.btnCopy).setOnClickListener { copySelected(false) }
+            view.findViewById<View>(R.id.btnMove).setOnClickListener { copySelected(true) }
 
-        loadDirectory(currentDir)
+            currentDir?.let { loadDirectory(it) }
+        } catch (e: Throwable) {
+            Log.e(TAG, "onViewCreated failed", e)
+            Toast.makeText(activity ?: return, "Ошибка UI: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     fun reloadCurrentDir() {
-        if (::currentDir.isInitialized) loadDirectory(currentDir)
+        currentDir?.let { loadDirectory(it) }
     }
 
     private fun loadDirectory(dir: File) {
-        if (!isAdded || view == null) return
-        if (!dir.exists() || !dir.isDirectory) return
-        currentDir = dir
-        (activity as? MainActivity)?.setPanePath(paneIndex, dir.absolutePath)
-
-        val files = dir.listFiles()
-            ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-            ?: emptyList()
-
-        val quickItems = files.map { f ->
-            FileItem(
-                file = f,
-                name = f.name,
-                isDirectory = f.isDirectory,
-                size = if (f.isDirectory) -1L else f.length(),
-                extension = f.extension
-            )
-        }
-        adapter.selectedFile = null
-        adapter.submitList(quickItems)
-        updateBreadcrumb()
-
-        val dirs = quickItems.filter { it.isDirectory }
-        if (dirs.isEmpty()) return
-        viewLifecycleOwner.lifecycleScope.launch {
-            val sizes: Map<File, Long> = withContext(Dispatchers.IO) {
-                dirs.associate { it.file to FileUtils.folderSize(it.file) }
+        try {
+            if (!isAdded || view == null) return
+            if (!dir.exists() || !dir.isDirectory) {
+                Log.w(TAG, "loadDirectory: not a dir ${dir.absolutePath}")
+                return
             }
-            if (!isAdded || view == null || currentDir != dir) return@launch
-            val updated = quickItems.map { item ->
-                val sz = sizes[item.file]
-                if (item.isDirectory && sz != null) item.copy(size = sz) else item
+            currentDir = dir
+            (activity as? MainActivity)?.setPanePath(paneIndex, dir.absolutePath)
+
+            val files = try { dir.listFiles() } catch (e: Throwable) {
+                Log.e(TAG, "listFiles failed on ${dir.absolutePath}", e); null
+            }?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })) ?: emptyList()
+
+            val quickItems = files.map { f ->
+                FileItem(
+                    file = f,
+                    name = f.name,
+                    isDirectory = f.isDirectory,
+                    size = if (f.isDirectory) -1L else runCatching { f.length() }.getOrDefault(0L),
+                    extension = f.extension
+                )
             }
-            adapter.submitList(updated)
+            adapter.selectedFile = null
+            adapter.submitList(quickItems)
+            updateBreadcrumb()
+
+            val dirs = quickItems.filter { it.isDirectory }
+            if (dirs.isEmpty()) return
+            viewLifecycleOwner.lifecycleScope.launch {
+                try {
+                    val sizes: Map<File, Long> = withContext(Dispatchers.IO) {
+                        dirs.associate { it.file to FileUtils.folderSize(it.file) }
+                    }
+                    if (!isAdded || view == null || currentDir != dir) return@launch
+                    val updated = quickItems.map { item ->
+                        val sz = sizes[item.file]
+                        if (item.isDirectory && sz != null) item.copy(size = sz) else item
+                    }
+                    adapter.submitList(updated)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "folderSize coroutine failed", e)
+                }
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "loadDirectory failed on ${dir.absolutePath}", e)
+            Toast.makeText(activity ?: return, "Ошибка чтения каталога: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun updateBreadcrumb() {
+        val dir = currentDir ?: return
         breadcrumbContainer.removeAllViews()
-        val segments = currentDir.absolutePath.split("/").filter { it.isNotEmpty() }
+        val segments = dir.absolutePath.split("/").filter { it.isNotEmpty() }
         var acc = ""
-
         breadcrumbContainer.addView(makeCrumb("/") { loadDirectory(File("/")) })
         for (seg in segments) {
             acc += "/$seg"
@@ -145,9 +170,8 @@ class FilePaneFragment : Fragment() {
         }
 
     private fun goToParent() {
-        val parent = currentDir.parentFile ?: return
-        if (!parent.exists()) return
-        loadDirectory(parent)
+        val parent = currentDir?.parentFile ?: return
+        if (parent.exists()) loadDirectory(parent)
     }
 
     private fun openFile(item: FileItem) {
@@ -162,6 +186,7 @@ class FilePaneFragment : Fragment() {
     }
 
     private fun showCreateDialog(isFile: Boolean) {
+        val dir = currentDir ?: return
         val input = EditText(requireContext()).apply {
             hint = if (isFile) "Имя файла" else "Имя каталога"
         }
@@ -171,10 +196,10 @@ class FilePaneFragment : Fragment() {
             .setPositiveButton("Сохранить") { _, _ ->
                 val name = input.text.toString().trim()
                 if (name.isEmpty()) return@setPositiveButton
-                val f = File(currentDir, name)
+                val f = File(dir, name)
                 try {
                     if (isFile) f.createNewFile() else f.mkdirs()
-                    loadDirectory(currentDir)
+                    loadDirectory(dir)
                 } catch (e: Exception) {
                     Toast.makeText(requireContext(), "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
@@ -194,7 +219,9 @@ class FilePaneFragment : Fragment() {
                     2 -> showRenameDialog(item.file)
                     3 -> Toast.makeText(requireContext(), "Просмотр", Toast.LENGTH_SHORT).show()
                     4 -> Toast.makeText(requireContext(), "Правка", Toast.LENGTH_SHORT).show()
-                    5 -> { if (item.file.deleteRecursively()) loadDirectory(currentDir) }
+                    5 -> {
+                        if (item.file.deleteRecursively()) currentDir?.let { loadDirectory(it) }
+                    }
                 }
             }.show()
     }
@@ -207,7 +234,7 @@ class FilePaneFragment : Fragment() {
             .setPositiveButton("OK") { _, _ ->
                 val newName = input.text.toString().trim()
                 if (newName.isEmpty()) return@setPositiveButton
-                if (file.renameTo(File(file.parentFile, newName))) loadDirectory(currentDir)
+                if (file.renameTo(File(file.parentFile, newName))) currentDir?.let { loadDirectory(it) }
             }
             .setNegativeButton("Отмена", null)
             .show()
@@ -233,7 +260,7 @@ class FilePaneFragment : Fragment() {
         try {
             val dest = File(targetDir, file.name)
             if (move) FileUtils.move(file, dest) else FileUtils.copy(file, dest)
-            loadDirectory(currentDir)
+            currentDir?.let { loadDirectory(it) }
         } catch (e: Exception) {
             Toast.makeText(requireContext(), "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
         }
